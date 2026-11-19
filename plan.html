@@ -17,7 +17,6 @@
   #bar a,#bar button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;min-height:52px;border-radius:10px;font-size:15px;font-weight:bold;text-decoration:none;border:none;cursor:pointer}
   #go{background:#1565c0;color:#fff}
   #play{background:#ffeb3b;color:#000}
-  #trip{background:#e8f5e9;color:#1b5e20;border:2px solid #1b5e20!important}
   #panel{position:fixed;left:0;right:0;bottom:0;top:38%;z-index:1500;background:#fff;border-radius:14px 14px 0 0;box-shadow:0 -4px 14px rgba(0,0,0,.35);display:none;flex-direction:column}
   #panel.on{display:flex}
   #panel header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #ddd;font-weight:bold;color:#1b5e20}
@@ -52,10 +51,8 @@
 <button id="sat">Plan</button>
 <div id="bar">
   <a id="go" href="#" target="_blank" rel="noopener">🧭 Y aller (Google Maps)</a>
-  <button id="play">▶ Manœuvre</button>
-  <button id="trip">📄 Trajet</button>
+  <button id="play">▶ Revoir la manœuvre</button>
 </div>
-<div id="panel"><header><span>📄 TRAJET ÉCRIT</span><button id="close">✕ Fermer</button></header><div id="steps"></div></div>
 <div id="msg"></div>
 <script>
 const $ = id => document.getElementById(id);
@@ -86,7 +83,7 @@ let plan, paths = [], running = 0;
   try { plan = await unpackPlan(h); } catch (e) { fail('Le lien du plan est abîmé ou incomplet.<br>Réessaie de scanner le QR code.'); return; }
   const D = [plan.d[0] / Q, plan.d[1] / Q];
   const abs = (dy, dx) => [D[0] + dy / Q, D[1] + dx / Q];
-  $('top').innerHTML = esc(plan.t || 'Plan d\'accès') + '<small>Regarde la manœuvre et le trajet, puis touche « Y aller » pour le GPS</small>';
+  $('top').innerHTML = esc(plan.t || 'Plan d\'accès') + '<small>Le parcours, puis la manœuvre à l\'arrivée · « Y aller » pour le GPS</small>';
   document.title = 'Plan – ' + (plan.t || '');
 
   // lien Google Maps : depuis la position du conducteur jusqu'à l'entrée de l'élevage
@@ -106,19 +103,7 @@ let plan, paths = [], running = 0;
     L.circleMarker(rp[0], { radius: 7, color: '#fff', weight: 2, fillColor: '#2e7d32', fillOpacity: 1 }).addTo(map).bindTooltip('DÉPART', { permanent: true, direction: 'top', className: '' });
     routeBounds = L.latLngBounds(rp).extend(D);
   }
-  // texte du trajet
-  const colorize = t => esc(t).replace(/\b([ANDEMC]\d{1,4}[A-Z]?)\b/g, '<span class="r">$1</span>').replace(/((?:DIRECTION|SUIVRE &gt;)\s+)([A-Z' \-\/«»]+?)(?=[,.;()]|\s+<span|$)/g, '$1<span class="g">$2</span>');
-  if (plan.s && plan.s.length) {
-    $('steps').innerHTML = plan.s.map(t => `<p${/^ITINERAIRE/.test(t) ? ' class="sum"' : ''}>${colorize(t)}</p>`).join('') + (plan.k ? `<p class="k">${esc(plan.k)}</p>` : '');
-  } else {
-    $('steps').innerHTML = '<p>Le texte du trajet n\'est pas dans ce QR code. Touche « Y aller (Google Maps) » pour le guidage.</p>';
-  }
   let maneuverBounds;
-  $('trip').onclick = () => {
-    $('panel').classList.add('on');
-    if (routeBounds) map.fitBounds(routeBounds, { paddingTopLeft: [20, 70], paddingBottomRight: [20, Math.round(window.innerHeight * 0.62)] });
-  };
-  $('close').onclick = () => { $('panel').classList.remove('on'); if (maneuverBounds) map.fitBounds(maneuverBounds, { maxZoom: 19, paddingTopLeft: [10, 70], paddingBottomRight: [10, 90] }); };
   L.marker(D, { interactive: false, icon: L.divIcon({ className: '', html: '<span class="dest">ÉLEVAGE</span>', iconSize: null, iconAnchor: [0, 26] }) }).addTo(map);
   L.circleMarker(D, { radius: 6, color: '#fff', weight: 2, fillColor: '#c62828', fillOpacity: 1 }).addTo(map);
 
@@ -171,8 +156,11 @@ let plan, paths = [], running = 0;
   if (!$('legend').innerHTML) $('legend').style.display = 'none';
 
   maneuverBounds = bounds.pad(0.25);
-  map.fitBounds(maneuverBounds, { maxZoom: 19, paddingTopLeft: [10, 70], paddingBottomRight: [10, 90] });
-  if (!paths.length) { $('play').disabled = true; $('play').textContent = 'Pas de manœuvre'; $('play').style.opacity = .5; if (plan.s && plan.s.length) $('trip').click(); return; }
+  const showFarm = anim => (anim ? map.flyToBounds : map.fitBounds).call(map, maneuverBounds, { maxZoom: 19, paddingTopLeft: [10, 70], paddingBottomRight: [10, 90], duration: 2.5 });
+  let intro = 0;
+  if (routeBounds) { map.fitBounds(routeBounds, { paddingTopLeft: [20, 80], paddingBottomRight: [20, 100] }); intro = 3200; setTimeout(() => showFarm(true), 2200); }
+  else showFarm(false);
+  if (!paths.length) { $('play').disabled = true; $('play').textContent = 'Pas de manœuvre dessinée'; $('play').style.opacity = .5; return; }
 
   // semi-remorque vu de dessus (tracteur + bétaillère), dessinés à l'échelle réelle
   const TRACTOR = `<svg viewBox="0 0 25 62" preserveAspectRatio="none" style="display:block;width:100%;height:100%">
@@ -207,8 +195,8 @@ let plan, paths = [], running = 0;
     });
   };
   map.on('zoomend', sizeTruck); setTimeout(sizeTruck, 50);
-  $('play').onclick = () => { $('close').click(); play(); };
-  setTimeout(play, 900);
+  $('play').onclick = () => { showFarm(true); setTimeout(play, 1200); };
+  setTimeout(play, intro + 1200);
 })();
 let tractorM, trailerM, sizeTruck = () => {};
 
