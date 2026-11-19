@@ -17,6 +17,17 @@
   #bar a,#bar button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;min-height:52px;border-radius:10px;font-size:15px;font-weight:bold;text-decoration:none;border:none;cursor:pointer}
   #go{background:#1565c0;color:#fff}
   #play{background:#ffeb3b;color:#000}
+  #trip{background:#e8f5e9;color:#1b5e20;border:2px solid #1b5e20!important}
+  #panel{position:fixed;left:0;right:0;bottom:0;top:38%;z-index:1500;background:#fff;border-radius:14px 14px 0 0;box-shadow:0 -4px 14px rgba(0,0,0,.35);display:none;flex-direction:column}
+  #panel.on{display:flex}
+  #panel header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #ddd;font-weight:bold;color:#1b5e20}
+  #panel header button{border:none;background:#eee;border-radius:8px;padding:8px 12px;font-weight:bold;font-size:14px}
+  #steps{overflow-y:auto;padding:10px 14px calc(env(safe-area-inset-bottom) + 90px);font-size:14px;line-height:1.45}
+  #steps p{margin:0 0 9px}
+  #steps .r{color:#e53935;font-weight:bold}
+  #steps .g{color:#2e7d32;font-weight:bold}
+  #steps .k{color:#e53935;font-weight:bold;text-align:right}
+  #steps .sum{background:#f1f8e9;border-left:4px solid #2e9e3e;padding:5px 8px}
   #state{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top) + 62px);z-index:1000;padding:6px 12px;border-radius:20px;font-weight:bold;font-size:14px;display:none;box-shadow:0 1px 6px rgba(0,0,0,.4)}
   #state.fwd{display:block;background:#ffeb3b;color:#000}
   #state.rev{display:block;background:#e53935;color:#fff}
@@ -41,8 +52,10 @@
 <button id="sat">Plan</button>
 <div id="bar">
   <a id="go" href="#" target="_blank" rel="noopener">🧭 Y aller (Google Maps)</a>
-  <button id="play">▶ Rejouer la manœuvre</button>
+  <button id="play">▶ Manœuvre</button>
+  <button id="trip">📄 Trajet</button>
 </div>
+<div id="panel"><header><span>📄 TRAJET ÉCRIT</span><button id="close">✕ Fermer</button></header><div id="steps"></div></div>
 <div id="msg"></div>
 <script>
 const $ = id => document.getElementById(id);
@@ -65,7 +78,7 @@ $('sat').onclick = () => { if (map.hasLayer(gsat)) { map.removeLayer(gsat); gmap
 function bearing(a, b) { const t = Math.PI / 180; const y = Math.sin((b[1] - a[1]) * t) * Math.cos(b[0] * t); const x = Math.cos(a[0] * t) * Math.sin(b[0] * t) - Math.sin(a[0] * t) * Math.cos(b[0] * t) * Math.cos((b[1] - a[1]) * t); return (Math.atan2(y, x) / t + 360) % 360; }
 const dist = (a, b) => L.latLng(a).distanceTo(b);
 
-let plan, paths = [], truck, truckEl, running = 0;
+let plan, paths = [], running = 0;
 
 (async () => {
   const h = location.hash.slice(1);
@@ -73,7 +86,7 @@ let plan, paths = [], truck, truckEl, running = 0;
   try { plan = await unpackPlan(h); } catch (e) { fail('Le lien du plan est abîmé ou incomplet.<br>Réessaie de scanner le QR code.'); return; }
   const D = [plan.d[0] / Q, plan.d[1] / Q];
   const abs = (dy, dx) => [D[0] + dy / Q, D[1] + dx / Q];
-  $('top').innerHTML = esc(plan.t || 'Plan d\'accès') + '<small>Manœuvre à l\'arrivée · touche « Y aller » pour le GPS</small>';
+  $('top').innerHTML = esc(plan.t || 'Plan d\'accès') + '<small>Regarde la manœuvre et le trajet, puis touche « Y aller » pour le GPS</small>';
   document.title = 'Plan – ' + (plan.t || '');
 
   // lien Google Maps : depuis la position du conducteur jusqu'à l'entrée de l'élevage
@@ -83,6 +96,29 @@ let plan, paths = [], truck, truckEl, running = 0;
   $('go').href = u;
 
   const bounds = L.latLngBounds([D]);
+  // tracé de l'itinéraire (si présent dans le QR code)
+  let routeBounds = null;
+  if (plan.r && plan.r.length >= 4) {
+    const rp = []; let y = plan.r[0], x = plan.r[1]; rp.push([y / 1e4, x / 1e4]);
+    for (let i = 2; i + 1 < plan.r.length; i += 2) { y += plan.r[i]; x += plan.r[i + 1]; rp.push([y / 1e4, x / 1e4]); }
+    L.polyline(rp, { color: '#0d47a1', weight: 7, opacity: .35 }).addTo(map);
+    L.polyline(rp, { color: '#1e88e5', weight: 4, opacity: .9 }).addTo(map);
+    L.circleMarker(rp[0], { radius: 7, color: '#fff', weight: 2, fillColor: '#2e7d32', fillOpacity: 1 }).addTo(map).bindTooltip('DÉPART', { permanent: true, direction: 'top', className: '' });
+    routeBounds = L.latLngBounds(rp).extend(D);
+  }
+  // texte du trajet
+  const colorize = t => esc(t).replace(/\b([ANDEMC]\d{1,4}[A-Z]?)\b/g, '<span class="r">$1</span>').replace(/((?:DIRECTION|SUIVRE &gt;)\s+)([A-Z' \-\/«»]+?)(?=[,.;()]|\s+<span|$)/g, '$1<span class="g">$2</span>');
+  if (plan.s && plan.s.length) {
+    $('steps').innerHTML = plan.s.map(t => `<p${/^ITINERAIRE/.test(t) ? ' class="sum"' : ''}>${colorize(t)}</p>`).join('') + (plan.k ? `<p class="k">${esc(plan.k)}</p>` : '');
+  } else {
+    $('steps').innerHTML = '<p>Le texte du trajet n\'est pas dans ce QR code. Touche « Y aller (Google Maps) » pour le guidage.</p>';
+  }
+  let maneuverBounds;
+  $('trip').onclick = () => {
+    $('panel').classList.add('on');
+    if (routeBounds) map.fitBounds(routeBounds, { paddingTopLeft: [20, 70], paddingBottomRight: [20, Math.round(window.innerHeight * 0.62)] });
+  };
+  $('close').onclick = () => { $('panel').classList.remove('on'); if (maneuverBounds) map.fitBounds(maneuverBounds, { maxZoom: 19, paddingTopLeft: [10, 70], paddingBottomRight: [10, 90] }); };
   L.marker(D, { interactive: false, icon: L.divIcon({ className: '', html: '<span class="dest">ÉLEVAGE</span>', iconSize: null, iconAnchor: [0, 26] }) }).addTo(map);
   L.circleMarker(D, { radius: 6, color: '#fff', weight: 2, fillColor: '#c62828', fillOpacity: 1 }).addTo(map);
 
@@ -134,47 +170,83 @@ let plan, paths = [], truck, truckEl, running = 0;
   $('legend').innerHTML = (kinds.has('f') || (plan.a || []).length ? '<div><i style="background:#ffeb3b"></i>MARCHE AVANT</div>' : '') + (kinds.has('r') ? '<div><i style="background:#e53935"></i>MARCHE ARRIÈRE</div>' : '');
   if (!$('legend').innerHTML) $('legend').style.display = 'none';
 
-  map.fitBounds(bounds.pad(0.25), { maxZoom: 19, paddingTopLeft: [10, 70], paddingBottomRight: [10, 90] });
-  if (!paths.length) { $('play').disabled = true; $('play').textContent = 'Pas de manœuvre dessinée'; $('play').style.opacity = .5; return; }
+  maneuverBounds = bounds.pad(0.25);
+  map.fitBounds(maneuverBounds, { maxZoom: 19, paddingTopLeft: [10, 70], paddingBottomRight: [10, 90] });
+  if (!paths.length) { $('play').disabled = true; $('play').textContent = 'Pas de manœuvre'; $('play').style.opacity = .5; if (plan.s && plan.s.length) $('trip').click(); return; }
 
-  // camion vu de dessus, l'avant vers le haut
-  const svg = `<svg class="truck" id="tk" viewBox="0 0 16 44" width="16" height="44"><rect x="1.5" y="13" width="13" height="30" rx="1" fill="#eceff1" stroke="#263238" stroke-width="1.2"/><rect x="2.5" y="1" width="11" height="10.5" rx="2.5" fill="#e53935" stroke="#263238" stroke-width="1.2"/><rect x="4" y="3" width="8" height="3" fill="#90caf9"/></svg>`;
-  truck = L.marker(paths[0].pts[0], { interactive: false, zIndexOffset: 1000, icon: L.divIcon({ className: '', html: svg, iconSize: [0, 0], iconAnchor: [0, 0] }) }).addTo(map);
-  const sizeTruck = () => {
-    const el = document.getElementById('tk'); if (!el) return;
+  // semi-remorque vu de dessus (tracteur + bétaillère), dessinés à l'échelle réelle
+  const TRACTOR = `<svg viewBox="0 0 25 62" preserveAspectRatio="none" style="display:block;width:100%;height:100%">
+    <rect x="3" y="20" width="19" height="40" rx="1.5" fill="#37474f"/>
+    <circle cx="12.5" cy="46" r="4.2" fill="#78909c" stroke="#263238" stroke-width="1"/>
+    <rect x="1" y="17" width="3" height="9" rx="1" fill="#212121"/><rect x="21" y="17" width="3" height="9" rx="1" fill="#212121"/>
+    <rect x="1" y="49" width="3" height="10" rx="1" fill="#212121"/><rect x="21" y="49" width="3" height="10" rx="1" fill="#212121"/>
+    <rect x="1.5" y="1" width="22" height="19" rx="4" fill="#d32f2f" stroke="#7f0000" stroke-width="1"/>
+    <rect x="3.5" y="2.5" width="18" height="4" rx="1.5" fill="#90caf9" stroke="#1565c0" stroke-width=".5"/>
+    <rect x="5" y="9" width="15" height="9" rx="1" fill="#e53935"/>
+    <rect x="0" y="4" width="1.6" height="3" fill="#7f0000"/><rect x="23.4" y="4" width="1.6" height="3" fill="#7f0000"/>
+  </svg>`;
+  const TRAILER = `<svg viewBox="0 0 26 136" preserveAspectRatio="none" style="display:block;width:100%;height:100%">
+    <rect x="0.8" y="0.8" width="24.4" height="134.4" rx="1.5" fill="#eceff1" stroke="#455a64" stroke-width="1.4"/>
+    ${Array.from({ length: 11 }, (_, i) => `<line x1="3" x2="23" y1="${10 + i * 11.5}" y2="${10 + i * 11.5}" stroke="#b0bec5" stroke-width="1.6"/>`).join('')}
+    <rect x="11" y="4" width="4" height="126" fill="#cfd8dc"/>
+    <rect x="-0.5" y="104" width="2" height="22" rx="1" fill="#212121"/><rect x="24.5" y="104" width="2" height="22" rx="1" fill="#212121"/>
+    <rect x="2" y="131" width="4" height="3" fill="#e53935"/><rect x="20" y="131" width="4" height="3" fill="#e53935"/>
+  </svg>`;
+  // repères (en mètres) : pivot de sellette à 4,6 m de l'avant du tracteur, à 1,2 m de l'avant de la remorque ; essieux remorque à ~9,5 m du pivot
+  const TR = { w: 2.5, h: 6.2, piv: 4.6 }, TL = { w: 2.6, h: 13.6, piv: 1.2 }, AXLE = 9.5;
+  const mk = (html, cls) => L.marker(paths[0].pts[0], { interactive: false, zIndexOffset: cls === 'tr' ? 1100 : 1000, icon: L.divIcon({ className: '', html: `<div class="${cls}" style="position:absolute;transform-origin:50% 0">${html}</div>`, iconSize: [0, 0], iconAnchor: [0, 0] }) }).addTo(map);
+  trailerM = mk(TRAILER, 'tl'); tractorM = mk(TRACTOR, 'tr');
+  sizeTruck = () => {
     const mpp = 156543.03 * Math.cos(D[0] * Math.PI / 180) / Math.pow(2, map.getZoom());
-    const hpx = Math.max(24, Math.min(110, 16.5 / mpp)), wpx = hpx * 16 / 44;
-    el.setAttribute('width', wpx); el.setAttribute('height', hpx);
-    el.style.marginLeft = (-wpx / 2) + 'px'; el.style.marginTop = (-hpx / 2) + 'px';
+    // taille réelle, avec un minimum pour rester visible quand on dézoome
+    const k = Math.max(1, 34 / (TL.h / mpp));
+    [[tractorM, TR], [trailerM, TL]].forEach(([m, S]) => {
+      const e = m.getElement() && m.getElement().firstElementChild; if (!e) return;
+      const w = S.w / mpp * k, h = S.h / mpp * k, py = S.piv / mpp * k;
+      Object.assign(e.style, { width: w + 'px', height: h + 'px', left: (-w / 2) + 'px', top: (-py) + 'px', transformOrigin: `50% ${py}px` });
+    });
   };
   map.on('zoomend', sizeTruck); setTimeout(sizeTruck, 50);
-  $('play').onclick = () => play();
+  $('play').onclick = () => { $('close').click(); play(); };
   setTimeout(play, 900);
 })();
+let tractorM, trailerM, sizeTruck = () => {};
 
+function pointAt(P, d) {
+  // point du tracé à la distance d (prolongé en ligne droite avant le début et après la fin)
+  const n = P.pts.length;
+  if (d <= 0 || d >= P.len) {
+    const [a, b] = d <= 0 ? [P.pts[0], P.pts[1]] : [P.pts[n - 2], P.pts[n - 1]];
+    const L0 = dist(a, b) || 1, base = d <= 0 ? a : b, over = d <= 0 ? d : d - P.len;
+    return [base[0] + (b[0] - a[0]) * over / L0, base[1] + (b[1] - a[1]) * over / L0];
+  }
+  let i = 0; while (i < n - 2 && P.cum[i + 1] < d) i++;
+  const t = (d - P.cum[i]) / ((P.cum[i + 1] - P.cum[i]) || 1), a = P.pts[i], b = P.pts[i + 1];
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
 function play() {
   const id = ++running;
-  const el = () => document.getElementById('tk');
   let k = 0;
+  const rot = (m, deg) => { const e = m.getElement() && m.getElement().firstElementChild; if (e) e.style.transform = `rotate(${deg}deg)`; };
   const runPath = () => {
     if (id !== running) return;
     if (k >= paths.length) { $('state').className = ''; setTimeout(() => { if (id === running) play(); }, 2500); return; }
-    const P = paths[k], dur = Math.max(2500, Math.min(11000, P.len / 9 * 1000));
-    const rev = P.kind === 'r';
+    const P = paths[k], dur = Math.max(3000, Math.min(12000, P.len / 7 * 1000)), rev = P.kind === 'r';
     $('state').className = rev ? 'rev' : 'fwd';
     $('state').textContent = rev ? '◀ MARCHE ARRIÈRE' : 'MARCHE AVANT ▶';
-    const t0 = performance.now();
+    const AXLE = 9.5, t0 = performance.now();
     const step = now => {
       if (id !== running) return;
       const f = Math.min(1, (now - t0) / dur), d = P.len * f;
-      let i = 0; while (i < P.pts.length - 2 && P.cum[i + 1] < d) i++;
-      const a = P.pts[i], b = P.pts[i + 1], t = (d - P.cum[i]) / ((P.cum[i + 1] - P.cum[i]) || 1);
-      truck.setLatLng([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
-      // en marche arrière, l'avant du camion regarde à l'opposé du déplacement
-      const br = bearing(a, b) + (rev ? 180 : 0), e = el();
-      if (e) e.style.transform = `rotate(${br}deg)`;
+      // marche avant : le tracteur mène, la remorque suit derrière sur le tracé
+      // marche arrière : la remorque passe devant (elle suit le tracé), le tracteur pousse
+      const K = pointAt(P, d), Ax = pointAt(P, rev ? d + AXLE : d - AXLE);
+      const head = rev ? bearing(pointAt(P, d + 1), pointAt(P, d - 1)) : bearing(pointAt(P, d - 1), pointAt(P, d + 1));
+      const trailerHead = bearing(Ax, K);
+      tractorM.setLatLng(K); trailerM.setLatLng(K);
+      rot(tractorM, head); rot(trailerM, trailerHead);
       if (f < 1) requestAnimationFrame(step);
-      else { k++; setTimeout(runPath, 700); }
+      else { k++; setTimeout(runPath, 800); }
     };
     requestAnimationFrame(step);
   };
