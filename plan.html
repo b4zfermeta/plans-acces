@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Plan d'accès – manœuvre</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b5e20">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:Arial,Helvetica,sans-serif;background:#111}
+  #top{position:fixed;top:0;left:0;right:0;z-index:1000;background:rgba(27,94,32,.95);color:#fff;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px;font-size:15px;font-weight:bold;text-align:center;line-height:1.25}
+  #top small{display:block;font-weight:normal;font-size:11px;opacity:.85;margin-top:2px}
+  #map{position:fixed;inset:0}
+  #bar{position:fixed;left:0;right:0;bottom:0;z-index:1000;display:flex;gap:8px;padding:8px 10px calc(env(safe-area-inset-bottom) + 10px);background:rgba(255,255,255,.97);box-shadow:0 -2px 8px rgba(0,0,0,.25)}
+  #bar a,#bar button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;min-height:52px;border-radius:10px;font-size:15px;font-weight:bold;text-decoration:none;border:none;cursor:pointer}
+  #go{background:#1565c0;color:#fff}
+  #play{background:#ffeb3b;color:#000}
+  #state{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top) + 62px);z-index:1000;padding:6px 12px;border-radius:20px;font-weight:bold;font-size:14px;display:none;box-shadow:0 1px 6px rgba(0,0,0,.4)}
+  #state.fwd{display:block;background:#ffeb3b;color:#000}
+  #state.rev{display:block;background:#e53935;color:#fff}
+  #legend{position:fixed;left:8px;bottom:calc(env(safe-area-inset-bottom) + 82px);z-index:1000;background:rgba(255,255,255,.92);border-radius:6px;padding:5px 8px;font-size:11px;font-weight:bold;line-height:1.7}
+  #legend i{display:inline-block;width:20px;height:5px;border:1px solid #000;vertical-align:middle;margin-right:5px}
+  #sat{position:fixed;right:8px;bottom:calc(env(safe-area-inset-bottom) + 82px);z-index:1000;background:#fff;border:1px solid #888;border-radius:6px;padding:7px 10px;font-size:12px;font-weight:bold}
+  #msg{position:fixed;inset:0;z-index:2000;display:none;align-items:center;justify-content:center;background:#fff;padding:30px;text-align:center;font-size:16px;line-height:1.5}
+  .lbl{background:#fff;border:1.5px solid #2e9e3e;color:#2e9e3e;font-size:11px;font-weight:bold;padding:1px 5px;white-space:nowrap;border-radius:2px;display:inline-block;box-shadow:0 0 3px rgba(0,0,0,.4)}
+  .numk{display:inline-block;background:#fff;border:2px solid #1565c0;color:#1565c0;font:bold 13px Arial;min-width:22px;height:22px;line-height:18px;text-align:center;box-shadow:0 0 2px #000}
+  .pk{display:inline-block;background:#1565c0;color:#fff;font:bold 15px Arial;width:22px;height:22px;line-height:22px;text-align:center;border-radius:3px;border:2px solid #fff}
+  .ico{font-size:22px;line-height:24px;text-align:center;filter:drop-shadow(0 0 2px #fff)}
+  .chev{font-size:13px;line-height:14px;text-align:center;text-shadow:0 0 2px #000,0 0 2px #000}
+  .dest{background:#c62828;color:#fff;font-weight:bold;font-size:11px;padding:2px 6px;border-radius:3px;white-space:nowrap;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .truck{transform-origin:50% 50%;will-change:transform}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="top">PLAN D'ACCÈS<small>Chargement…</small></div>
+<div id="state"></div>
+<div id="legend"></div>
+<button id="sat">Plan</button>
+<div id="bar">
+  <a id="go" href="#" target="_blank" rel="noopener">🧭 Y aller (Google Maps)</a>
+  <button id="play">▶ Rejouer la manœuvre</button>
+</div>
+<div id="msg"></div>
+<script>
+const $ = id => document.getElementById(id);
+const Q = 1e5;
+const unb64u = s => { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+async function unpackPlan(s) {
+  const t = s[0], by = unb64u(s.slice(1));
+  if (t === 'z') return JSON.parse(await new Response(new Blob([by]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text());
+  return JSON.parse(new TextDecoder().decode(by));
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function fail(t) { $('msg').style.display = 'flex'; $('msg').innerHTML = t; }
+
+const map = L.map('map', { zoomControl: false, maxZoom: 21 }).setView([46.5, -1], 6);
+const gsat = L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&hl=fr&x={x}&y={y}&z={z}', { subdomains: '0123', maxNativeZoom: 20, maxZoom: 21, attribution: 'Google' });
+const gmap = L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&hl=fr&x={x}&y={y}&z={z}', { subdomains: '0123', maxNativeZoom: 20, maxZoom: 21, attribution: 'Google' });
+gsat.addTo(map);
+$('sat').onclick = () => { if (map.hasLayer(gsat)) { map.removeLayer(gsat); gmap.addTo(map); $('sat').textContent = 'Satellite'; } else { map.removeLayer(gmap); gsat.addTo(map); $('sat').textContent = 'Plan'; } };
+
+function bearing(a, b) { const t = Math.PI / 180; const y = Math.sin((b[1] - a[1]) * t) * Math.cos(b[0] * t); const x = Math.cos(a[0] * t) * Math.sin(b[0] * t) - Math.sin(a[0] * t) * Math.cos(b[0] * t) * Math.cos((b[1] - a[1]) * t); return (Math.atan2(y, x) / t + 360) % 360; }
+const dist = (a, b) => L.latLng(a).distanceTo(b);
+
+let plan, paths = [], truck, truckEl, running = 0;
+
+(async () => {
+  const h = location.hash.slice(1);
+  if (!h) { fail('Ce lien ne contient pas de plan.<br>Scanne le QR code imprimé sur le plan d\'accès.'); return; }
+  try { plan = await unpackPlan(h); } catch (e) { fail('Le lien du plan est abîmé ou incomplet.<br>Réessaie de scanner le QR code.'); return; }
+  const D = [plan.d[0] / Q, plan.d[1] / Q];
+  const abs = (dy, dx) => [D[0] + dy / Q, D[1] + dx / Q];
+  $('top').innerHTML = esc(plan.t || 'Plan d\'accès') + '<small>Manœuvre à l\'arrivée · touche « Y aller » pour le GPS</small>';
+  document.title = 'Plan – ' + (plan.t || '');
+
+  // lien Google Maps : depuis la position du conducteur jusqu'à l'entrée de l'élevage
+  const ll6 = p => p[0].toFixed(6) + ',' + p[1].toFixed(6);
+  let u = 'https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + ll6(D);
+  if (plan.w && plan.w.length) u += '&waypoints=' + plan.w.map(w => ll6(abs(w[0], w[1]))).join('%7C');
+  $('go').href = u;
+
+  const bounds = L.latLngBounds([D]);
+  L.marker(D, { interactive: false, icon: L.divIcon({ className: '', html: '<span class="dest">ÉLEVAGE</span>', iconSize: null, iconAnchor: [0, 26] }) }).addTo(map);
+  L.circleMarker(D, { radius: 6, color: '#fff', weight: 2, fillColor: '#c62828', fillOpacity: 1 }).addTo(map);
+
+  // tracés marche avant / arrière
+  const kinds = new Set();
+  (plan.p || []).forEach(p => {
+    const kind = p[0], pts = []; let y = p[1], x = p[2]; pts.push(abs(y, x));
+    for (let i = 3; i + 1 < p.length; i += 2) { y += p[i]; x += p[i + 1]; pts.push(abs(y, x)); }
+    if (pts.length < 2) return;
+    kinds.add(kind);
+    const col = kind === 'r' ? '#e53935' : '#ffeb3b';
+    L.polyline(pts, { color: kind === 'r' ? '#fff' : '#000', weight: 8, opacity: .6 }).addTo(map);
+    L.polyline(pts, { color: col, weight: 5, opacity: 1, dashArray: kind === 'r' ? '10 7' : null }).addTo(map);
+    // petites flèches le long du tracé
+    const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + dist(pts[i - 1], pts[i]));
+    const len = cum[cum.length - 1], sp = Math.max(6, len / 10);
+    for (let d0 = sp * .6; d0 < len - 2; d0 += sp) {
+      let i = 0; while (i < pts.length - 2 && cum[i + 1] < d0) i++;
+      const t = (d0 - cum[i]) / ((cum[i + 1] - cum[i]) || 1), a = pts[i], b = pts[i + 1];
+      const at = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], br = bearing(a, b);
+      L.marker(at, { interactive: false, icon: L.divIcon({ className: '', html: `<div class="chev" style="color:${col};transform:rotate(${br - 90}deg)">➤</div>`, iconSize: [14, 14], iconAnchor: [7, 7] }) }).addTo(map);
+    }
+    pts.forEach(q => bounds.extend(q));
+    paths.push({ kind, pts, cum, len });
+  });
+
+  // flèches droites / courbes
+  (plan.a || []).forEach(a => {
+    const col = a[0] || '#ffeb3b', A = abs(a[1], a[2]), B = abs(a[3], a[4]), C = abs(a[5], a[6]);
+    const q = [2 * C[0] - (A[0] + B[0]) / 2, 2 * C[1] - (A[1] + B[1]) / 2], pts = [];
+    for (let i = 0; i <= 30; i++) { const t = i / 30, v = 1 - t; pts.push([v * v * A[0] + 2 * v * t * q[0] + t * t * B[0], v * v * A[1] + 2 * v * t * q[1] + t * t * B[1]]); }
+    L.polyline(pts, { color: '#000', weight: 8, opacity: .5 }).addTo(map);
+    L.polyline(pts, { color: col, weight: 5, opacity: 1, dashArray: a[7] ? '10 7' : null }).addTo(map);
+    const br = bearing(pts[27], pts[30]);
+    L.marker(B, { interactive: false, icon: L.divIcon({ className: '', html: `<div class="chev" style="color:${col};font-size:22px;transform:rotate(${br - 90}deg)">➤</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(map);
+    pts.forEach(p => bounds.extend(p));
+    if (!(plan.p || []).length) { const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + dist(pts[i - 1], pts[i])); paths.push({ kind: a[7] ? 'r' : 'f', pts, cum, len: cum[cum.length - 1] }); }
+  });
+
+  // étiquettes, numéros et pictos
+  (plan.l || []).forEach(l => { const p = abs(l[1], l[2]); bounds.extend(p); L.marker(p, { interactive: false, icon: L.divIcon({ className: '', html: `<span class="lbl">${esc(l[0])}</span>`, iconSize: null, iconAnchor: [0, 0] }) }).addTo(map); });
+  const ICON = { t: '🚛', x: '⛔', w: '⚠️', p: '<span class="pk">P</span>' };
+  (plan.i || []).forEach(i => {
+    const p = abs(i[1], i[2]); bounds.extend(p);
+    const html = /^n\d+$/.test(i[0]) ? `<span class="numk">${i[0].slice(1)}</span>` : (ICON[i[0]] || '•');
+    L.marker(p, { interactive: false, icon: L.divIcon({ className: 'ico', html, iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(map);
+  });
+
+  $('legend').innerHTML = (kinds.has('f') || (plan.a || []).length ? '<div><i style="background:#ffeb3b"></i>MARCHE AVANT</div>' : '') + (kinds.has('r') ? '<div><i style="background:#e53935"></i>MARCHE ARRIÈRE</div>' : '');
+  if (!$('legend').innerHTML) $('legend').style.display = 'none';
+
+  map.fitBounds(bounds.pad(0.25), { maxZoom: 19, paddingTopLeft: [10, 70], paddingBottomRight: [10, 90] });
+  if (!paths.length) { $('play').disabled = true; $('play').textContent = 'Pas de manœuvre dessinée'; $('play').style.opacity = .5; return; }
+
+  // camion vu de dessus, l'avant vers le haut
+  const svg = `<svg class="truck" id="tk" viewBox="0 0 16 44" width="16" height="44"><rect x="1.5" y="13" width="13" height="30" rx="1" fill="#eceff1" stroke="#263238" stroke-width="1.2"/><rect x="2.5" y="1" width="11" height="10.5" rx="2.5" fill="#e53935" stroke="#263238" stroke-width="1.2"/><rect x="4" y="3" width="8" height="3" fill="#90caf9"/></svg>`;
+  truck = L.marker(paths[0].pts[0], { interactive: false, zIndexOffset: 1000, icon: L.divIcon({ className: '', html: svg, iconSize: [0, 0], iconAnchor: [0, 0] }) }).addTo(map);
+  const sizeTruck = () => {
+    const el = document.getElementById('tk'); if (!el) return;
+    const mpp = 156543.03 * Math.cos(D[0] * Math.PI / 180) / Math.pow(2, map.getZoom());
+    const hpx = Math.max(24, Math.min(110, 16.5 / mpp)), wpx = hpx * 16 / 44;
+    el.setAttribute('width', wpx); el.setAttribute('height', hpx);
+    el.style.marginLeft = (-wpx / 2) + 'px'; el.style.marginTop = (-hpx / 2) + 'px';
+  };
+  map.on('zoomend', sizeTruck); setTimeout(sizeTruck, 50);
+  $('play').onclick = () => play();
+  setTimeout(play, 900);
+})();
+
+function play() {
+  const id = ++running;
+  const el = () => document.getElementById('tk');
+  let k = 0;
+  const runPath = () => {
+    if (id !== running) return;
+    if (k >= paths.length) { $('state').className = ''; setTimeout(() => { if (id === running) play(); }, 2500); return; }
+    const P = paths[k], dur = Math.max(2500, Math.min(11000, P.len / 9 * 1000));
+    const rev = P.kind === 'r';
+    $('state').className = rev ? 'rev' : 'fwd';
+    $('state').textContent = rev ? '◀ MARCHE ARRIÈRE' : 'MARCHE AVANT ▶';
+    const t0 = performance.now();
+    const step = now => {
+      if (id !== running) return;
+      const f = Math.min(1, (now - t0) / dur), d = P.len * f;
+      let i = 0; while (i < P.pts.length - 2 && P.cum[i + 1] < d) i++;
+      const a = P.pts[i], b = P.pts[i + 1], t = (d - P.cum[i]) / ((P.cum[i + 1] - P.cum[i]) || 1);
+      truck.setLatLng([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      // en marche arrière, l'avant du camion regarde à l'opposé du déplacement
+      const br = bearing(a, b) + (rev ? 180 : 0), e = el();
+      if (e) e.style.transform = `rotate(${br}deg)`;
+      if (f < 1) requestAnimationFrame(step);
+      else { k++; setTimeout(runPath, 700); }
+    };
+    requestAnimationFrame(step);
+  };
+  runPath();
+}
+</script>
+</body>
+</html>
